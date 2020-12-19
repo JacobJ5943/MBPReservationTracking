@@ -2,8 +2,12 @@ import requests
 import json
 import datetime
 import boto3
+import pytz
+
 from bs4 import BeautifulSoup
-def get_reservations_for_date(month,day,year):
+
+
+def get_reservations_for_date(month, day, year):
     url = "https://app.rockgympro.com/b/widget/?a=equery"
 
     payload = {'show_date': str(year) + '-' + str(month) + '-' + str(day),
@@ -29,37 +33,41 @@ def get_reservations_for_date(month,day,year):
     body_json = json.loads(response.text)
     return body_json['event_list_html']
 
-def get_reservations_from_html(html:str, hour,minute, ampm):
+
+def get_reservations_from_html(html: str, hour, minute, ampm):
     soup = BeautifulSoup(html, 'html.parser')
     table = soup.table
-    reservationList = table.children
+    reservation_list = table.children
     time_to_find = generate_timeslot_string(hour, minute, ampm)
 
-    for child in reservationList:
+    for child in reservation_list:
         if child == '\n':
             continue
 
         # Find if the time is in this one
         contents = child.contents
-        contents = filter(lambda x : x != '\n',
-                   contents)
-        timeFound = False
+        contents = filter(lambda x: x != '\n',
+                          contents)
+        time_found = False
         for content in contents:
-            if timeFound:
+            if time_found:
                 content = str(content)
                 if 'Availability' in content:
-                    endIndex = content.find('spaces') -1
-                    startindex = content.find('<br/>') + 5
+                    end_index = content.find('spaces') - 1
+                    start_index = content.find('<br/>') + 5
 
-                    if endIndex < 0 or startindex < 0:
-                        return -404
-                    reservations = content[startindex:endIndex]
+                    if end_index < 0 or start_index < 0:
+                        return 0
+                    reservations = content[start_index:end_index]
                     return int(reservations)
             if time_to_find in str(content):
-                timeFound = True
+                time_found = True
     return -404
+
+
 def get_next_slot_reservation():
-    date = datetime.datetime.utcnow()
+    tzinfo = pytz.timezone('US/Mountain')
+    date = datetime.datetime.now(tzinfo)
     month = date.month
     year = date.year
     day = date.day
@@ -78,6 +86,7 @@ def generate_timeslot_string(hour, minute, ampm):
 
     return time_to_find
 
+
 def timeslot_from_hour_minute(hour, minute):
     if minute < 30:
         minute = 30
@@ -90,40 +99,30 @@ def timeslot_from_hour_minute(hour, minute):
         ampm = 'PM'
         hour = hour - 12
 
-    return (hour, minute, ampm)
+    return hour, minute, ampm
+
 
 def send_results_to_s3(results):
     s3_client = boto3.client('s3')
-    corgi = s3_client.get_object(Bucket='mbpreservations', Key='Reservations.csv')
-    corgibody = corgi['Body'].read()
-    corgibody = corgibody.decode('utf-8') + results + '\n'
-    corgi2_response = s3_client.put_object(Bucket='mbpreservations', Key='Reservations.csv',Body=corgibody)
-    pass
-if __name__ == '__main__':
-    timeNow = datetime.datetime.utcnow()
-    hour = timeNow.hour
-    minute = timeNow.minute
-
-    (timeslotHour, timeslotMinute, ampm) = timeslot_from_hour_minute(hour, minute)
-    timeslot = generate_timeslot_string(timeslotHour, timeslotMinute, ampm)
-    insert_line =  str(timeNow) + '|' + timeslot[:len(timeslot) -3] + '|' + str(get_next_slot_reservation())
-    send_results_to_s3(insert_line)
-    
-
+    mbp_reservation_csv = s3_client.get_object(Bucket='mbpreservations', Key='Reservations.csv')
+    mbp_reservation_csv_body = mbp_reservation_csv['Body'].read()
+    mbp_reservation_csv_body = mbp_reservation_csv_body.decode('utf-8') + results + '\n'
+    corgi2_response = s3_client.put_object(Bucket='mbpreservations', Key='Reservations.csv',
+                                           Body=mbp_reservation_csv_body)
 
 
 # This is what will occur for a lambda function
 def lambda_handler(event, context):
-    timeNow = datetime.datetime.utcnow()
+    tzinfo = pytz.timezone('US/Mountain')
+    timeNow = datetime.datetime.now(tzinfo)
     hour = timeNow.hour
     minute = timeNow.minute
 
     (timeslotHour, timeslotMinute, ampm) = timeslot_from_hour_minute(hour, minute)
     timeslot = generate_timeslot_string(timeslotHour, timeslotMinute, ampm)
-    insert_line =  str(timeNow) + '|' + timeslot[:len(timeslot) -3] + '|' + str(get_next_slot_reservation())
+    insert_line = str(timeNow) + '|' + timeslot[:len(timeslot) - 3] + '|' + str(get_next_slot_reservation())
     send_results_to_s3(insert_line)
     return {
         'statusCode': 200,
         'body': json.dumps('Complpete')
     }
-
